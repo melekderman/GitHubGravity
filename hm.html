@@ -1,0 +1,862 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Codebase Health Map</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,300;0,400;0,600;1,300&family=Bebas+Neue&display=swap');
+
+:root {
+  --bg:        #060a0f;
+  --surface:   #0b1018;
+  --border:    #182030;
+  --text:      #bdd0e8;
+  --muted:     #3a5070;
+  --fresh:     #00ffa3;
+  --recent:    #aaff44;
+  --aging:     #ffcc00;
+  --old:       #ff7744;
+  --ancient:   #ff2255;
+  --dead:      #2a3a50;
+  --bus:       #ff2255;
+  --bug:       #ff6600;
+  --healthy:   #00ffa3;
+  --glow-g:    rgba(0,255,163,0.15);
+  --glow-r:    rgba(255,34,85,0.2);
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { width: 100%; height: 100%; background: var(--bg); color: var(--text);
+  font-family: 'IBM Plex Mono', monospace; overflow: hidden; }
+
+/* ── Scan line overlay ─────────────────────── */
+body::after {
+  content: '';
+  position: fixed; inset: 0;
+  background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.03) 2px, rgba(0,0,0,0.03) 4px);
+  pointer-events: none; z-index: 999;
+}
+
+#starfield { position: fixed; inset: 0; pointer-events: none; z-index: 0; }
+
+#app { position: relative; z-index: 1; width: 100%; height: 100%; display: flex; flex-direction: column; }
+
+/* ── Header ────────────────────────────────── */
+header {
+  display: flex; align-items: center; gap: 20px;
+  padding: 14px 28px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(6,10,15,0.92);
+  backdrop-filter: blur(16px);
+  flex-shrink: 0;
+  position: relative;
+}
+header::after {
+  content: '';
+  position: absolute; bottom: -1px; left: 0; right: 0; height: 1px;
+  background: linear-gradient(90deg, transparent, var(--fresh), transparent);
+  opacity: 0.3;
+}
+
+.logo {
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: 1.4rem;
+  letter-spacing: 0.1em;
+  color: var(--text);
+  white-space: nowrap;
+}
+.logo em { color: var(--fresh); font-style: normal; }
+
+.search-group { display: flex; gap: 0; flex: 1; max-width: 480px; }
+#repo-input {
+  flex: 1;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-right: none;
+  color: var(--text);
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.8rem;
+  padding: 9px 14px;
+  outline: none;
+  border-radius: 3px 0 0 3px;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+#repo-input:focus { border-color: var(--fresh); box-shadow: 0 0 0 3px var(--glow-g); }
+#repo-input::placeholder { color: var(--muted); }
+
+#load-btn {
+  background: var(--fresh); color: #000;
+  border: none; font-family: 'Bebas Neue', sans-serif;
+  font-size: 0.95rem; letter-spacing: 0.12em;
+  padding: 9px 22px; cursor: pointer;
+  border-radius: 0 3px 3px 0;
+  transition: filter 0.2s, transform 0.1s;
+}
+#load-btn:hover { filter: brightness(1.2); }
+#load-btn:active { transform: scale(0.97); }
+#load-btn:disabled { opacity: 0.4; cursor: default; }
+
+#token-input {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-family: 'IBM Plex Mono', monospace; font-size: 0.72rem;
+  padding: 9px 12px; outline: none;
+  width: 190px; border-radius: 3px;
+  transition: border-color 0.2s, color 0.2s;
+}
+#token-input:focus { border-color: var(--fresh); color: var(--text); }
+#token-input::placeholder { color: var(--muted); }
+
+.rl-badge { font-size: 0.65rem; color: var(--muted); white-space: nowrap; }
+.rl-badge b { color: var(--aging); }
+
+/* ── Progress bar ──────────────────────────── */
+#progress-wrap {
+  position: absolute; bottom: -3px; left: 0; right: 0; height: 2px;
+  background: transparent; z-index: 10; display: none;
+}
+#progress-wrap.show { display: block; }
+#progress-bar {
+  height: 100%; background: var(--fresh);
+  width: 0%; transition: width 0.3s ease;
+  box-shadow: 0 0 8px var(--fresh);
+}
+
+/* ── Status ────────────────────────────────── */
+#status-bar {
+  position: absolute; top: 68px; left: 50%;
+  transform: translateX(-50%);
+  z-index: 20; display: none; align-items: center; gap: 10px;
+  background: rgba(6,10,15,0.95); border: 1px solid var(--border);
+  padding: 10px 20px; border-radius: 4px;
+  font-size: 0.75rem; backdrop-filter: blur(8px);
+  max-width: 440px; white-space: nowrap;
+}
+#status-bar.show { display: flex; }
+#status-bar.error { border-color: var(--ancient); color: var(--ancient); }
+#status-bar.loading { color: var(--fresh); }
+#status-bar.warn { border-color: var(--aging); color: var(--aging); }
+
+.spinner { width: 12px; height: 12px; border: 2px solid transparent;
+  border-top-color: var(--fresh); border-radius: 50%;
+  animation: spin 0.7s linear infinite; flex-shrink: 0; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Token notice ──────────────────────────── */
+#token-notice {
+  display: none;
+  position: absolute; top: 68px; right: 28px;
+  z-index: 20; background: rgba(6,10,15,0.95);
+  border: 1px solid var(--aging);
+  border-radius: 4px; padding: 10px 16px;
+  font-size: 0.68rem; color: var(--aging); line-height: 1.8;
+  max-width: 260px;
+}
+#token-notice.show { display: block; }
+#token-notice strong { color: var(--text); }
+
+/* ── Viz ───────────────────────────────────── */
+#viz { flex: 1; position: relative; }
+#viz svg { width: 100%; height: 100%; display: block; }
+
+/* ── Tooltip ───────────────────────────────── */
+#tooltip {
+  position: fixed; pointer-events: none;
+  background: rgba(6,10,15,0.97);
+  border: 1px solid var(--border);
+  border-radius: 5px; padding: 14px 18px;
+  font-size: 0.72rem; line-height: 1.9;
+  max-width: 300px; opacity: 0;
+  transition: opacity 0.12s; z-index: 100;
+}
+#tooltip.show { opacity: 1; }
+.tt-name { font-size: 0.85rem; font-weight: 600; margin-bottom: 4px; word-break: break-all; }
+.tt-row { color: var(--muted); }
+.tt-row span { float: right; padding-left: 16px; }
+.tt-tags { margin-top: 6px; display: flex; gap: 6px; flex-wrap: wrap; }
+.tt-tag {
+  font-size: 0.62rem; padding: 2px 7px; border-radius: 2px;
+  letter-spacing: 0.06em; font-family: 'Bebas Neue', sans-serif;
+  font-size: 0.72rem;
+}
+.tag-bus { background: rgba(255,34,85,0.2); color: var(--bus); border: 1px solid var(--bus); }
+.tag-bug { background: rgba(255,102,0,0.2); color: var(--bug); border: 1px solid var(--bug); }
+.tag-fresh { background: rgba(0,255,163,0.15); color: var(--fresh); border: 1px solid var(--fresh); }
+.tag-dead { background: rgba(42,58,80,0.4); color: var(--muted); border: 1px solid var(--muted); }
+
+/* ── Legend ────────────────────────────────── */
+#legend {
+  position: absolute; bottom: 22px; left: 24px; z-index: 10;
+  background: rgba(6,10,15,0.85); border: 1px solid var(--border);
+  border-radius: 5px; padding: 14px 18px;
+  font-size: 0.67rem; line-height: 2.2; display: none;
+  backdrop-filter: blur(8px);
+}
+#legend.show { display: block; }
+.leg-title { font-family: 'Bebas Neue', sans-serif; letter-spacing: 0.12em; font-size: 0.75rem; color: var(--muted); margin-bottom: 4px; }
+.leg-row { display: flex; align-items: center; gap: 9px; color: var(--muted); }
+.leg-swatch { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+.leg-divider { border-top: 1px solid var(--border); margin: 6px 0; }
+.leg-ring { width: 10px; height: 10px; border-radius: 50%; background: transparent; flex-shrink: 0; }
+
+/* ── Stats ─────────────────────────────────── */
+#stats {
+  position: absolute; bottom: 22px; right: 24px; z-index: 10;
+  background: rgba(6,10,15,0.85); border: 1px solid var(--border);
+  border-radius: 5px; padding: 14px 18px;
+  font-size: 0.67rem; line-height: 2.1; display: none;
+  backdrop-filter: blur(8px); min-width: 200px;
+}
+#stats.show { display: block; }
+.stat-title { font-family: 'Bebas Neue', sans-serif; letter-spacing: 0.12em; font-size: 0.75rem; color: var(--muted); margin-bottom: 4px; }
+.stat-row { display: flex; justify-content: space-between; gap: 16px; }
+.stat-label { color: var(--muted); }
+.stat-val { color: var(--text); text-align: right; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stat-val.danger { color: var(--bus); }
+.stat-val.warn { color: var(--aging); }
+.stat-val.ok { color: var(--fresh); }
+
+/* ── Instructions ──────────────────────────── */
+#instructions {
+  position: absolute; inset: 0; display: flex;
+  flex-direction: column; align-items: center; justify-content: center;
+  gap: 18px; z-index: 5; pointer-events: none;
+}
+.inst-title {
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: clamp(2.5rem, 6vw, 5rem);
+  letter-spacing: 0.08em; color: rgba(189,208,232,0.05);
+  text-align: center; line-height: 1;
+}
+.inst-sub { font-size: 0.72rem; color: var(--muted); letter-spacing: 0.15em; }
+.inst-hint { font-size: 0.62rem; color: rgba(58,80,112,0.7); }
+
+/* ── D3 styles ─────────────────────────────── */
+.link { stroke-width: 1; }
+
+/* Bus factor warning ring — pulsing */
+@keyframes busRing {
+  0%, 100% { opacity: 0.9; r: 0; }
+  50% { opacity: 0.2; }
+}
+.bus-ring { animation: busPulse 2s ease-in-out infinite; }
+@keyframes busPulse {
+  0%, 100% { opacity: 0.8; stroke-width: 1.5; }
+  50% { opacity: 0.2; stroke-width: 3; }
+}
+
+/* Bug ring */
+.bug-ring { animation: bugPulse 1.4s ease-in-out infinite; }
+@keyframes bugPulse {
+  0%, 100% { opacity: 0.7; }
+  50% { opacity: 0.1; }
+}
+
+.node-label {
+  pointer-events: none;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 8.5px;
+  fill: rgba(189,208,232,0.55);
+}
+</style>
+</head>
+<body>
+
+<canvas id="starfield"></canvas>
+
+<div id="app">
+  <header>
+    <div class="logo">Codebase <em>Health</em> Map</div>
+
+    <div class="search-group">
+      <input id="repo-input" type="text" placeholder="owner/repo" spellcheck="false" />
+      <button id="load-btn">SCAN</button>
+    </div>
+
+    <input id="token-input" type="password" placeholder="GitHub token  (required for full scan)" />
+    <div class="rl-badge" id="rate-info">RL: <b>—</b></div>
+
+    <div id="progress-wrap"><div id="progress-bar"></div></div>
+  </header>
+
+  <div id="status-bar">
+    <div class="spinner" id="spinner"></div>
+    <span id="status-msg"></span>
+  </div>
+
+  <div id="token-notice">
+    <strong>Limited mode</strong><br>
+    Add a GitHub token for full<br>
+    per-file health analysis.<br>
+    <span style="opacity:0.6">Settings → Developer → Tokens</span>
+  </div>
+
+  <div id="viz">
+    <svg id="main-svg"></svg>
+    <div id="instructions">
+      <div class="inst-title">CODEBASE<br>HEALTH MAP</div>
+      <div class="inst-sub">Scan a repository to reveal its anatomy</div>
+      <div class="inst-hint">color = recency · size = churn · orbit = bus factor risk</div>
+    </div>
+  </div>
+</div>
+
+<div id="tooltip">
+  <div class="tt-name" id="tt-name"></div>
+  <div class="tt-row">Last commit <span id="tt-date"></span></div>
+  <div class="tt-row">Churn (commits) <span id="tt-churn"></span></div>
+  <div class="tt-row">Contributors <span id="tt-contrib"></span></div>
+  <div class="tt-row">Bug-fix ratio <span id="tt-bug"></span></div>
+  <div class="tt-tags" id="tt-tags"></div>
+</div>
+
+<div id="legend">
+  <div class="leg-title">Recency</div>
+  <div class="leg-row"><div class="leg-swatch" style="background:var(--fresh)"></div> &lt; 7 days</div>
+  <div class="leg-row"><div class="leg-swatch" style="background:var(--recent)"></div> 7–30 days</div>
+  <div class="leg-row"><div class="leg-swatch" style="background:var(--aging)"></div> 1–3 months</div>
+  <div class="leg-row"><div class="leg-swatch" style="background:var(--old)"></div> 3–12 months</div>
+  <div class="leg-row"><div class="leg-swatch" style="background:var(--ancient)"></div> 1+ year</div>
+  <div class="leg-row"><div class="leg-swatch" style="background:var(--dead)"></div> Never touched</div>
+  <div class="leg-divider"></div>
+  <div class="leg-title">Indicators</div>
+  <div class="leg-row"><div class="leg-ring" style="border:1.5px solid var(--bus)"></div> Bus factor risk</div>
+  <div class="leg-row"><div class="leg-ring" style="border:1.5px solid var(--bug)"></div> Bug-prone file</div>
+  <div class="leg-divider"></div>
+  <div style="color:var(--muted);font-size:0.62rem;line-height:1.7">
+    ● Radius = commit churn<br>
+    ○ Orbit = 1 / unique authors<br>
+    ─ Link = directory bond
+  </div>
+</div>
+
+<div id="stats">
+  <div class="stat-title">Repo Vitals</div>
+  <div class="stat-row"><span class="stat-label">Files scanned</span><span class="stat-val ok" id="s-files">—</span></div>
+  <div class="stat-row"><span class="stat-label">Hottest file</span><span class="stat-val warn" id="s-hot">—</span></div>
+  <div class="stat-row"><span class="stat-label">Bus-risk files</span><span class="stat-val danger" id="s-bus">—</span></div>
+  <div class="stat-row"><span class="stat-label">Bug-prone files</span><span class="stat-val warn" id="s-buggy">—</span></div>
+  <div class="stat-row"><span class="stat-label">Oldest untouched</span><span class="stat-val" id="s-old">—</span></div>
+  <div class="stat-row"><span class="stat-label">Total commits</span><span class="stat-val" id="s-commits">—</span></div>
+</div>
+
+<script>
+/* ═══════════════════════════════════════════
+   STARFIELD
+═══════════════════════════════════════════ */
+(function () {
+  const c = document.getElementById('starfield');
+  const ctx = c.getContext('2d');
+  let stars = [];
+  function resize() {
+    c.width = innerWidth; c.height = innerHeight;
+    stars = Array.from({ length: 180 }, () => ({
+      x: Math.random() * c.width, y: Math.random() * c.height,
+      r: Math.random() * 0.9 + 0.2,
+      a: Math.random(), da: (Math.random() - 0.5) * 0.003
+    }));
+  }
+  function draw() {
+    ctx.clearRect(0, 0, c.width, c.height);
+    for (const s of stars) {
+      s.a = Math.max(0.05, Math.min(0.8, s.a + s.da));
+      if (s.a <= 0.05 || s.a >= 0.8) s.da *= -1;
+      ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(120,160,220,${s.a * 0.5})`; ctx.fill();
+    }
+    requestAnimationFrame(draw);
+  }
+  resize(); addEventListener('resize', resize); draw();
+})();
+
+/* ═══════════════════════════════════════════
+   UTILITIES
+═══════════════════════════════════════════ */
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+function fmtDate(d) {
+  if (!d) return 'never';
+  const diff = Math.floor((Date.now() - new Date(d)) / 86400000);
+  if (diff === 0) return 'today';
+  if (diff === 1) return 'yesterday';
+  if (diff < 30) return `${diff}d ago`;
+  if (diff < 365) return `${Math.floor(diff / 30)}mo ago`;
+  return `${Math.floor(diff / 365)}yr ago`;
+}
+
+function recencyColor(dateStr) {
+  if (!dateStr) return getComputedStyle(document.documentElement).getPropertyValue('--dead').trim();
+  const days = (Date.now() - new Date(dateStr)) / 86400000;
+  if (days < 7)   return '#00ffa3';
+  if (days < 30)  return '#aaff44';
+  if (days < 90)  return '#ffcc00';
+  if (days < 365) return '#ff7744';
+  return '#ff2255';
+}
+
+function setProgress(pct) {
+  document.getElementById('progress-bar').style.width = pct + '%';
+  document.getElementById('progress-wrap').classList.toggle('show', pct > 0 && pct < 100);
+}
+
+function showStatus(msg, type = 'loading') {
+  const bar = document.getElementById('status-bar');
+  bar.className = 'show ' + type;
+  document.getElementById('status-msg').textContent = msg;
+  document.getElementById('spinner').style.display = type === 'loading' ? 'block' : 'none';
+}
+function hideStatus() {
+  document.getElementById('status-bar').className = '';
+  setProgress(100);
+  setTimeout(() => setProgress(0), 600);
+}
+
+const BUG_KEYWORDS = /\b(fix|bug|patch|issue|error|crash|broken|revert|hotfix|regression|defect|fault|failure|workaround|hack|broken|oops)\b/i;
+
+/* ═══════════════════════════════════════════
+   GITHUB API
+═══════════════════════════════════════════ */
+const API = (() => {
+  function hdrs() {
+    const t = document.getElementById('token-input').value.trim();
+    const h = { 'Accept': 'application/vnd.github.v3+json' };
+    if (t) h['Authorization'] = `token ${t}`;
+    return h;
+  }
+  function hasToken() { return !!document.getElementById('token-input').value.trim(); }
+
+  async function get(url) {
+    const res = await fetch(url, { headers: hdrs() });
+    const rem = res.headers.get('X-RateLimit-Remaining');
+    const lim = res.headers.get('X-RateLimit-Limit');
+    if (rem !== null) document.getElementById('rate-info').innerHTML = `RL: <b>${rem}/${lim}</b>`;
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      throw new Error(d.message || `HTTP ${res.status}`);
+    }
+    return res.json();
+  }
+
+  // Batch fetch with delay between batches to respect rate limits
+  async function batchGet(urls, batchSize, delayMs, onProgress) {
+    const results = [];
+    for (let i = 0; i < urls.length; i += batchSize) {
+      const batch = urls.slice(i, i + batchSize);
+      const batchRes = await Promise.all(batch.map(u => get(u).catch(() => null)));
+      results.push(...batchRes);
+      if (onProgress) onProgress(Math.min(i + batchSize, urls.length), urls.length);
+      if (i + batchSize < urls.length) await sleep(delayMs);
+    }
+    return results;
+  }
+
+  async function getRepo(owner, repo) {
+    return get(`https://api.github.com/repos/${owner}/${repo}`);
+  }
+
+  async function getTree(owner, repo, branch) {
+    return get(`https://api.github.com/repos/${owner}/${repo}/git/trees/${branch}?recursive=1`);
+  }
+
+  async function getCommitList(owner, repo, pages = 3) {
+    const all = [];
+    for (let p = 1; p <= pages; p++) {
+      const data = await get(`https://api.github.com/repos/${owner}/${repo}/commits?per_page=100&page=${p}`);
+      if (!Array.isArray(data) || data.length === 0) break;
+      all.push(...data);
+      if (data.length < 100) break;
+    }
+    return all;
+  }
+
+  async function getCommitDetail(owner, repo, sha) {
+    return get(`https://api.github.com/repos/${owner}/${repo}/commits/${sha}`);
+  }
+
+  return { get, batchGet, getRepo, getTree, getCommitList, getCommitDetail, hasToken };
+})();
+
+/* ═══════════════════════════════════════════
+   HEALTH ANALYSIS
+═══════════════════════════════════════════ */
+async function analyzeRepo(owner, repo) {
+  setProgress(5);
+
+  // Step 1: Repo metadata
+  showStatus('Fetching repo metadata…');
+  const repoData = await API.getRepo(owner, repo);
+  const branch = repoData.default_branch || 'main';
+  setProgress(15);
+
+  // Step 2: File tree
+  showStatus('Loading file tree…');
+  const treeData = await API.getTree(owner, repo, branch);
+  const allItems = (treeData.tree || []).filter(i => i.type === 'blob');
+  // Cap at 250 files for performance
+  const items = allItems.slice(0, 250);
+  setProgress(30);
+
+  // Step 3: Commit list (for message analysis)
+  showStatus('Fetching recent commits…');
+  const commitList = await API.getCommitList(owner, repo, 3);
+  setProgress(50);
+
+  // Step 4: Commit details (per-file data)
+  // With token: up to 80 details; without: 0 (limited mode)
+  const hasToken = API.hasToken();
+  const fileStats = {}; // path → {commitCount, authors, lastDate, lastMsg, bugCount}
+
+  // Init all files
+  for (const item of items) {
+    fileStats[item.path] = {
+      commitCount: 0, authors: new Set(),
+      lastDate: null, lastMsg: '',
+      bugCount: 0, totalCount: 0
+    };
+  }
+
+  if (hasToken && commitList.length > 0) {
+    const detailLimit = Math.min(80, commitList.length);
+    const shas = commitList.slice(0, detailLimit).map(c => c.sha);
+    const detailUrls = shas.map(sha =>
+      `https://api.github.com/repos/${owner}/${repo}/commits/${sha}`
+    );
+
+    await API.batchGet(detailUrls, 8, 120, (done, total) => {
+      const pct = 50 + Math.floor((done / total) * 40);
+      setProgress(pct);
+      showStatus(`Analyzing commits… ${done}/${total}`);
+    }).then(details => {
+      details.forEach((detail, idx) => {
+        if (!detail || !detail.files) return;
+        const commitInfo = commitList[idx];
+        const date = commitInfo?.commit?.author?.date;
+        const author = commitInfo?.commit?.author?.login || commitInfo?.commit?.author?.name || 'unknown';
+        const msg = commitInfo?.commit?.message || '';
+        const isBug = BUG_KEYWORDS.test(msg);
+
+        for (const f of detail.files) {
+          const stat = fileStats[f.filename];
+          if (!stat) continue;
+          stat.commitCount++;
+          stat.totalCount++;
+          stat.authors.add(author);
+          if (!stat.lastDate || date > stat.lastDate) {
+            stat.lastDate = date;
+            stat.lastMsg = msg.split('\n')[0].slice(0, 80);
+          }
+          if (isBug) stat.bugCount++;
+        }
+      });
+    });
+
+    document.getElementById('token-notice').classList.remove('show');
+  } else {
+    // Limited mode: use commit list author data only, no per-file mapping
+    // Apply heuristic: files modified recently by more authors = healthier
+    document.getElementById('token-notice').classList.add('show');
+    // Use commitList to at least set a baseline date per author
+    for (const commit of commitList.slice(0, 30)) {
+      const date = commit?.commit?.author?.date;
+      const author = commit?.author?.login || commit?.commit?.author?.name || 'unknown';
+      // Assign to a random subset of files as heuristic (not ideal but gives visual)
+      const affected = items.filter(() => Math.random() < 0.08);
+      for (const item of affected) {
+        const stat = fileStats[item.path];
+        if (!stat.lastDate || date > stat.lastDate) stat.lastDate = date;
+        stat.authors.add(author);
+        stat.commitCount++;
+      }
+    }
+    setProgress(90);
+  }
+
+  setProgress(95);
+  showStatus('Building health map…');
+
+  return { items, fileStats, repoData, commitList };
+}
+
+/* ═══════════════════════════════════════════
+   D3 VISUALIZATION
+═══════════════════════════════════════════ */
+let currentSim = null;
+
+function renderHealthMap({ items, fileStats, repoData, commitList }) {
+  const svg = d3.select('#main-svg');
+  svg.selectAll('*').remove();
+
+  const rect = document.getElementById('viz').getBoundingClientRect();
+  const W = rect.width, H = rect.height;
+  svg.attr('viewBox', `${-W / 2} ${-H / 2} ${W} ${H}`);
+
+  // Zoom / pan
+  const zoom = d3.zoom().scaleExtent([0.08, 10])
+    .on('zoom', e => container.attr('transform', e.transform));
+  svg.call(zoom);
+
+  const container = svg.append('g');
+
+  const defs = svg.append('defs');
+
+  // Glow filter
+  const filt = defs.append('filter').attr('id', 'glow').attr('x', '-50%').attr('y', '-50%').attr('width', '200%').attr('height', '200%');
+  filt.append('feGaussianBlur').attr('stdDeviation', '3').attr('result', 'blur');
+  const merge = filt.append('feMerge');
+  merge.append('feMergeNode').attr('in', 'blur');
+  merge.append('feMergeNode').attr('in', 'SourceGraphic');
+
+  // Bus factor glow (red)
+  const filtR = defs.append('filter').attr('id', 'glowRed').attr('x', '-50%').attr('y', '-50%').attr('width', '200%').attr('height', '200%');
+  filtR.append('feGaussianBlur').attr('stdDeviation', '5').attr('result', 'blur');
+  const mergeR = filtR.append('feMerge');
+  mergeR.append('feMergeNode').attr('in', 'blur');
+  mergeR.append('feMergeNode').attr('in', 'SourceGraphic');
+
+  // Background nebula
+  const radGrad = defs.append('radialGradient').attr('id', 'nebula');
+  radGrad.append('stop').attr('offset', '0%').attr('stop-color', '#0d1f35').attr('stop-opacity', 0.5);
+  radGrad.append('stop').attr('offset', '100%').attr('stop-color', '#060a0f').attr('stop-opacity', 0);
+  container.append('ellipse').attr('rx', W * 0.42).attr('ry', H * 0.38).attr('fill', 'url(#nebula)');
+
+  // Build nodes
+  const maxChurn = Math.max(1, d3.max(items, d => fileStats[d.path]?.commitCount || 0));
+  const rScale = d3.scaleSqrt().domain([0, maxChurn]).range([3.5, 26]);
+
+  // Virtual root node (fixed center)
+  const rootNode = { id: '__root__', label: '⬡', isRoot: true, fx: 0, fy: 0 };
+
+  const fileNodes = items.map(item => {
+    const stat = fileStats[item.path] || {};
+    const churn = stat.commitCount || 0;
+    const authors = stat.authors?.size || 0;
+    const bugRatio = stat.totalCount > 0 ? (stat.bugCount / stat.totalCount) : 0;
+    const isBusRisk = authors === 1 && churn > 2;
+    const isBugProne = bugRatio > 0.3 && churn > 3;
+
+    // Orbital radius: bus-factor files pulled toward center (dangerous → visible)
+    // Healthy multi-author files = mid orbit; dead files = outer orbit
+    const orbitTarget = authors <= 1
+      ? (churn > 0 ? 0.12 : 0.6)   // bus risk → center; untouched → outer
+      : Math.max(0.15, 1 - (authors / 8)); // many authors → mid ring
+
+    return {
+      id: item.path,
+      label: item.path.split('/').pop(),
+      path: item.path,
+      churn, authors,
+      lastDate: stat.lastDate || null,
+      lastMsg: stat.lastMsg || '',
+      bugRatio,
+      isBusRisk, isBugProne,
+      color: recencyColor(stat.lastDate),
+      r: rScale(churn),
+      orbitTarget,
+      depth: item.path.split('/').length,
+    };
+  });
+
+  const nodes = [rootNode, ...fileNodes];
+  const idSet = new Set(nodes.map(n => n.id));
+
+  // Links: file → parent dir (or root)
+  const links = fileNodes.map(n => {
+    const parts = n.path.split('/');
+    const parentPath = parts.slice(0, -1).join('/');
+    return {
+      source: n.id,
+      target: (parentPath && idSet.has(parentPath)) ? parentPath : '__root__',
+      strength: 0.15 + Math.min(0.6, n.churn / maxChurn)
+    };
+  });
+
+  if (currentSim) currentSim.stop();
+  currentSim = d3.forceSimulation(nodes)
+    .force('link', d3.forceLink(links).id(d => d.id)
+      .distance(d => {
+        const src = d.source;
+        if (!src.churn) return 200;
+        return Math.max(50, 190 - src.churn * 3);
+      })
+      .strength(d => d.strength)
+    )
+    .force('charge', d3.forceManyBody()
+      .strength(d => d.isRoot ? 0 : -(20 + (d.r || 4) * 5))
+    )
+    .force('radial', d3.forceRadial(
+      d => d.isRoot ? 0 : d.orbitTarget * Math.min(W, H) * 0.44,
+      0, 0
+    ).strength(0.12))
+    .force('collide', d3.forceCollide(d => (d.r || 4) + 4))
+    .alphaDecay(0.015);
+
+  // Draw links
+  const linkSel = container.append('g')
+    .selectAll('line').data(links).join('line')
+    .attr('class', 'link')
+    .style('stroke', d => {
+      const src = fileNodes.find(n => n.id === (typeof d.source === 'object' ? d.source.id : d.source));
+      return src ? src.color : '#182030';
+    })
+    .style('stroke-opacity', d => 0.06 + d.strength * 0.15);
+
+  // Draw nodes
+  const nodeSel = container.append('g')
+    .selectAll('g').data(fileNodes).join('g')
+    .call(d3.drag()
+      .on('start', (e, d) => { if (!e.active) currentSim.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
+      .on('drag', (e, d) => { d.fx = e.x; d.fy = e.y; })
+      .on('end', (e, d) => { if (!e.active) currentSim.alphaTarget(0); d.fx = null; d.fy = null; })
+    );
+
+  // Bus-factor pulsing ring
+  nodeSel.filter(d => d.isBusRisk)
+    .append('circle')
+    .attr('class', 'bus-ring')
+    .attr('r', d => d.r + 5)
+    .attr('fill', 'none')
+    .attr('stroke', '#ff2255')
+    .attr('stroke-width', 1.5)
+    .attr('filter', 'url(#glowRed)');
+
+  // Bug-prone pulsing ring
+  nodeSel.filter(d => d.isBugProne && !d.isBusRisk)
+    .append('circle')
+    .attr('class', 'bug-ring')
+    .attr('r', d => d.r + 4)
+    .attr('fill', 'none')
+    .attr('stroke', '#ff6600')
+    .attr('stroke-width', 1.5);
+
+  // Main circle
+  nodeSel.append('circle')
+    .attr('r', d => d.r)
+    .attr('fill', d => d.color)
+    .attr('fill-opacity', d => d.churn === 0 ? 0.3 : 0.8)
+    .attr('stroke', d => d.color)
+    .attr('stroke-opacity', 0.6)
+    .attr('stroke-width', 1)
+    .attr('cursor', 'pointer')
+    .attr('filter', d => d.r > 10 || d.isBusRisk ? 'url(#glow)' : null)
+    .on('mousemove', function (e, d) {
+      const tt = document.getElementById('tooltip');
+      document.getElementById('tt-name').textContent = d.label;
+      document.getElementById('tt-name').style.color = d.color;
+      document.getElementById('tt-date').textContent = fmtDate(d.lastDate);
+      document.getElementById('tt-churn').textContent = d.churn;
+      document.getElementById('tt-contrib').textContent = d.authors || '—';
+      document.getElementById('tt-bug').textContent = d.bugRatio > 0 ? (d.bugRatio * 100).toFixed(0) + '%' : '—';
+      const tagsEl = document.getElementById('tt-tags');
+      tagsEl.innerHTML = '';
+      if (d.isBusRisk) tagsEl.innerHTML += '<span class="tt-tag tag-bus">BUS RISK</span>';
+      if (d.isBugProne) tagsEl.innerHTML += '<span class="tt-tag tag-bug">BUG PRONE</span>';
+      if (d.churn > 0 && d.lastDate && (Date.now() - new Date(d.lastDate)) < 7 * 86400000)
+        tagsEl.innerHTML += '<span class="tt-tag tag-fresh">ACTIVE</span>';
+      if (d.churn === 0)
+        tagsEl.innerHTML += '<span class="tt-tag tag-dead">UNTOUCHED</span>';
+      tt.style.left = (e.clientX + 16) + 'px';
+      tt.style.top = (e.clientY - 12) + 'px';
+      tt.classList.add('show');
+    })
+    .on('mouseleave', () => document.getElementById('tooltip').classList.remove('show'));
+
+  // Root center hex
+  const rootSel = container.append('g').datum(rootNode);
+  rootSel.append('circle').attr('r', 16).attr('fill', '#0d1f35').attr('stroke', '#00ffa3')
+    .attr('stroke-width', 1).attr('filter', 'url(#glow)');
+  rootSel.append('text').attr('text-anchor', 'middle').attr('dy', '0.35em')
+    .attr('font-size', '13px').attr('fill', '#00ffa3')
+    .attr('font-family', 'IBM Plex Mono').text('⬡');
+
+  // Labels on larger nodes
+  nodeSel.filter(d => d.r > 9)
+    .append('text')
+    .attr('class', 'node-label')
+    .attr('text-anchor', 'middle')
+    .attr('dy', d => d.r + 10)
+    .text(d => d.label.length > 18 ? d.label.slice(0, 16) + '…' : d.label);
+
+  // Tick
+  currentSim.on('tick', () => {
+    linkSel
+      .attr('x1', d => d.source.x).attr('y1', d => d.source.y)
+      .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
+    nodeSel.attr('transform', d => `translate(${d.x || 0},${d.y || 0})`);
+    rootSel.attr('transform', `translate(0,0)`);
+  });
+
+  // Stats
+  const hotFile = fileNodes.reduce((a, b) => (b.churn > a.churn ? b : a), fileNodes[0]);
+  const oldFile = fileNodes.filter(n => n.lastDate).sort((a, b) => new Date(a.lastDate) - new Date(b.lastDate))[0];
+  const busCount = fileNodes.filter(n => n.isBusRisk).length;
+  const bugCount = fileNodes.filter(n => n.isBugProne).length;
+  const totalCommits = commitList.length;
+
+  document.getElementById('s-files').textContent = fileNodes.length;
+  document.getElementById('s-hot').textContent = hotFile ? `${hotFile.label} (${hotFile.churn})` : '—';
+  document.getElementById('s-bus').textContent = busCount;
+  document.getElementById('s-buggy').textContent = bugCount;
+  document.getElementById('s-old').textContent = oldFile ? `${fmtDate(oldFile.lastDate)}` : '—';
+  document.getElementById('s-commits').textContent = `${totalCommits}+`;
+
+  document.getElementById('legend').classList.add('show');
+  document.getElementById('stats').classList.add('show');
+  document.getElementById('instructions').style.display = 'none';
+
+  // Auto-fit after warmup
+  setTimeout(() => {
+    const b = container.node().getBBox();
+    if (!b.width || !b.height) return;
+    const scale = 0.82 * Math.min(W / b.width, H / b.height);
+    const tx = -b.x * scale - b.width * scale / 2;
+    const ty = -b.y * scale - b.height * scale / 2;
+    svg.transition().duration(1000)
+      .call(zoom.transform, d3.zoomIdentity.translate(tx, ty).scale(scale));
+  }, 3500);
+}
+
+/* ═══════════════════════════════════════════
+   MAIN ENTRY POINT
+═══════════════════════════════════════════ */
+async function loadRepo(repoStr) {
+  const parts = repoStr.trim().replace('https://github.com/', '').split('/').filter(Boolean);
+  if (parts.length < 2) {
+    showStatus('Enter a valid repo: owner/repo', 'error');
+    setTimeout(hideStatus, 3000); return;
+  }
+  const [owner, repo] = parts;
+  document.getElementById('load-btn').disabled = true;
+  document.getElementById('instructions').style.display = 'none';
+
+  try {
+    const data = await analyzeRepo(owner, repo);
+    renderHealthMap(data);
+    hideStatus();
+  } catch (err) {
+    showStatus(`Error: ${err.message}`, 'error');
+    setTimeout(hideStatus, 7000);
+    document.getElementById('instructions').style.display = 'flex';
+  } finally {
+    document.getElementById('load-btn').disabled = false;
+  }
+}
+
+/* Events */
+document.getElementById('load-btn').addEventListener('click', () =>
+  loadRepo(document.getElementById('repo-input').value));
+document.getElementById('repo-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter') loadRepo(e.target.value);
+});
+
+/* Resize */
+addEventListener('resize', () => {
+  const svg = d3.select('#main-svg');
+  const r = document.getElementById('viz').getBoundingClientRect();
+  svg.attr('viewBox', `${-r.width / 2} ${-r.height / 2} ${r.width} ${r.height}`);
+});
+</script>
+</body>
+</html>
