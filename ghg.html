@@ -1,0 +1,768 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GitHub Gravity — Repo Universe</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Syne:wght@400;700;800&display=swap');
+
+  :root {
+    --bg:       #03050f;
+    --surface:  #080d1e;
+    --border:   #1a2340;
+    --text:     #c8d8ff;
+    --muted:    #4a5a80;
+    --accent:   #4dffa8;
+    --accent2:  #ff6b6b;
+    --accent3:  #ffd166;
+    --glow:     rgba(77,255,168,0.18);
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body {
+    width: 100%; height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Space Mono', monospace;
+    overflow: hidden;
+  }
+
+  /* ── Starfield canvas ─────────────────────────────── */
+  #starfield {
+    position: fixed; inset: 0;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  /* ── Main layout ──────────────────────────────────── */
+  #app {
+    position: relative; z-index: 1;
+    width: 100%; height: 100%;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ── Header bar ───────────────────────────────────── */
+  header {
+    display: flex;
+    align-items: center;
+    gap: 24px;
+    padding: 18px 32px;
+    border-bottom: 1px solid var(--border);
+    background: linear-gradient(180deg, rgba(8,13,30,0.95) 0%, rgba(8,13,30,0.6) 100%);
+    backdrop-filter: blur(12px);
+    flex-shrink: 0;
+  }
+
+  .logo {
+    font-family: 'Syne', sans-serif;
+    font-weight: 800;
+    font-size: 1.1rem;
+    letter-spacing: -0.02em;
+    white-space: nowrap;
+  }
+  .logo span { color: var(--accent); }
+
+  .search-wrap {
+    display: flex;
+    gap: 0;
+    flex: 1;
+    max-width: 520px;
+  }
+
+  #repo-input {
+    flex: 1;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-right: none;
+    color: var(--text);
+    font-family: 'Space Mono', monospace;
+    font-size: 0.82rem;
+    padding: 10px 16px;
+    outline: none;
+    transition: border-color 0.2s, box-shadow 0.2s;
+    border-radius: 4px 0 0 4px;
+  }
+  #repo-input:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--glow);
+  }
+  #repo-input::placeholder { color: var(--muted); }
+
+  #load-btn {
+    background: var(--accent);
+    color: #000;
+    border: none;
+    font-family: 'Syne', sans-serif;
+    font-weight: 700;
+    font-size: 0.82rem;
+    padding: 10px 22px;
+    cursor: pointer;
+    border-radius: 0 4px 4px 0;
+    letter-spacing: 0.04em;
+    transition: filter 0.2s, transform 0.1s;
+    white-space: nowrap;
+  }
+  #load-btn:hover { filter: brightness(1.15); }
+  #load-btn:active { transform: scale(0.97); }
+  #load-btn:disabled { opacity: 0.45; cursor: default; }
+
+  #token-input {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--muted);
+    font-family: 'Space Mono', monospace;
+    font-size: 0.72rem;
+    padding: 10px 14px;
+    outline: none;
+    width: 200px;
+    border-radius: 4px;
+    transition: border-color 0.2s;
+  }
+  #token-input:focus { border-color: var(--accent); color: var(--text); }
+  #token-input::placeholder { color: var(--muted); }
+
+  .rate-badge {
+    font-size: 0.68rem;
+    color: var(--muted);
+    white-space: nowrap;
+    letter-spacing: 0.05em;
+  }
+  .rate-badge b { color: var(--accent3); }
+
+  /* ── Status / error bar ───────────────────────────── */
+  #status-bar {
+    position: absolute;
+    top: 72px; left: 50%;
+    transform: translateX(-50%);
+    z-index: 20;
+    display: none;
+    align-items: center;
+    gap: 12px;
+    background: rgba(8,13,30,0.92);
+    border: 1px solid var(--border);
+    padding: 12px 22px;
+    border-radius: 6px;
+    font-size: 0.78rem;
+    backdrop-filter: blur(8px);
+    max-width: 480px;
+    text-align: center;
+  }
+  #status-bar.show { display: flex; }
+  #status-bar.error { border-color: var(--accent2); color: var(--accent2); }
+  #status-bar.loading { color: var(--accent); }
+
+  .spinner {
+    width: 14px; height: 14px;
+    border: 2px solid transparent;
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    flex-shrink: 0;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ── Viz canvas ───────────────────────────────────── */
+  #viz {
+    flex: 1;
+    position: relative;
+  }
+  #viz svg {
+    width: 100%; height: 100%;
+    display: block;
+  }
+
+  /* ── Tooltip ──────────────────────────────────────── */
+  #tooltip {
+    position: fixed;
+    pointer-events: none;
+    background: rgba(8,13,30,0.96);
+    border: 1px solid var(--accent);
+    border-radius: 6px;
+    padding: 12px 16px;
+    font-size: 0.74rem;
+    line-height: 1.7;
+    max-width: 280px;
+    opacity: 0;
+    transition: opacity 0.15s;
+    z-index: 100;
+    box-shadow: 0 0 24px rgba(77,255,168,0.12);
+  }
+  #tooltip.show { opacity: 1; }
+  #tooltip .tt-name { font-family: 'Syne', sans-serif; font-weight: 700; color: var(--accent); font-size: 0.85rem; word-break: break-all; }
+  #tooltip .tt-row { color: var(--muted); }
+  #tooltip .tt-row span { color: var(--text); }
+
+  /* ── Legend ───────────────────────────────────────── */
+  #legend {
+    position: absolute;
+    bottom: 24px; left: 28px;
+    z-index: 10;
+    background: rgba(8,13,30,0.78);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 14px 18px;
+    font-size: 0.7rem;
+    line-height: 2;
+    backdrop-filter: blur(8px);
+    display: none;
+  }
+  #legend.show { display: block; }
+  .legend-row { display: flex; align-items: center; gap: 10px; color: var(--muted); }
+  .legend-dot { border-radius: 50%; flex-shrink: 0; }
+
+  /* ── Stats panel ──────────────────────────────────── */
+  #stats {
+    position: absolute;
+    bottom: 24px; right: 28px;
+    z-index: 10;
+    background: rgba(8,13,30,0.78);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 14px 18px;
+    font-size: 0.7rem;
+    line-height: 2.1;
+    backdrop-filter: blur(8px);
+    display: none;
+    min-width: 180px;
+  }
+  #stats.show { display: block; }
+  #stats .stat-label { color: var(--muted); }
+  #stats .stat-val { color: var(--accent); float: right; padding-left: 16px; }
+
+  /* ── Instructions overlay ─────────────────────────── */
+  #instructions {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 20px;
+    z-index: 5;
+    pointer-events: none;
+  }
+  .inst-title {
+    font-family: 'Syne', sans-serif;
+    font-weight: 800;
+    font-size: clamp(2rem, 5vw, 4rem);
+    letter-spacing: -0.03em;
+    color: rgba(200,216,255,0.08);
+    text-align: center;
+    line-height: 1.1;
+  }
+  .inst-sub {
+    font-size: 0.75rem;
+    color: var(--muted);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+
+  /* ── D3 node/link styles ──────────────────────────── */
+  .link {
+    stroke: rgba(77,255,168,0.12);
+    stroke-width: 1;
+  }
+  .node circle {
+    cursor: pointer;
+    stroke-width: 1.5;
+    transition: filter 0.2s;
+  }
+  .node circle:hover {
+    filter: brightness(1.4) drop-shadow(0 0 8px currentColor);
+  }
+  .node text {
+    pointer-events: none;
+    font-family: 'Space Mono', monospace;
+    font-size: 9px;
+    fill: rgba(200,216,255,0.65);
+  }
+  .node.dir circle { stroke-dasharray: 4 2; }
+  .center-star { filter: drop-shadow(0 0 20px #ffd166) drop-shadow(0 0 40px #ff6b6b); }
+</style>
+</head>
+<body>
+
+<canvas id="starfield"></canvas>
+
+<div id="app">
+  <header>
+    <div class="logo">GitHub<span>Gravity</span></div>
+
+    <div class="search-wrap">
+      <input id="repo-input" type="text" placeholder="owner/repo  e.g. torvalds/linux" spellcheck="false" />
+      <button id="load-btn">LAUNCH</button>
+    </div>
+
+    <input id="token-input" type="password" placeholder="GitHub token (optional, for rate limit)" />
+
+    <div class="rate-badge" id="rate-info">API RL: <b>—</b></div>
+  </header>
+
+  <div id="status-bar">
+    <div class="spinner" id="spinner"></div>
+    <span id="status-msg">Loading…</span>
+  </div>
+
+  <div id="viz">
+    <svg id="main-svg"></svg>
+    <div id="instructions">
+      <div class="inst-title">GITHUB<br>GRAVITY</div>
+      <div class="inst-sub">Enter a repository above to explore its universe</div>
+    </div>
+  </div>
+</div>
+
+<div id="tooltip">
+  <div class="tt-name" id="tt-name"></div>
+  <div class="tt-row">Size: <span id="tt-size"></span></div>
+  <div class="tt-row">Type: <span id="tt-type"></span></div>
+  <div class="tt-row">Commits touching: <span id="tt-commits"></span></div>
+  <div class="tt-row">Extension: <span id="tt-ext"></span></div>
+</div>
+
+<div id="legend">
+  <div class="legend-row"><div class="legend-dot" style="width:8px;height:8px;background:#4dffa8;"></div> Source code</div>
+  <div class="legend-row"><div class="legend-dot" style="width:8px;height:8px;background:#ffd166;"></div> Config / Data</div>
+  <div class="legend-row"><div class="legend-dot" style="width:8px;height:8px;background:#ff6b6b;"></div> Docs / Markdown</div>
+  <div class="legend-row"><div class="legend-dot" style="width:8px;height:8px;background:#a78bfa;"></div> Directory</div>
+  <div class="legend-row"><div class="legend-dot" style="width:8px;height:8px;background:#60c3ff;"></div> Binary / Media</div>
+  <div style="margin-top:6px;color:var(--muted);font-size:0.65rem;">● Radius = file size<br>─ Link opacity = commit gravity</div>
+</div>
+
+<div id="stats">
+  <div><span class="stat-label">Files</span><span class="stat-val" id="s-files">0</span></div>
+  <div><span class="stat-label">Dirs</span><span class="stat-val" id="s-dirs">0</span></div>
+  <div><span class="stat-label">Total size</span><span class="stat-val" id="s-size">0</span></div>
+  <div><span class="stat-label">Contributors</span><span class="stat-val" id="s-contrib">0</span></div>
+  <div><span class="stat-label">Total commits</span><span class="stat-val" id="s-commits">0</span></div>
+</div>
+
+<script>
+/* ═══════════════════════════════════════════════════════
+   STARFIELD
+═══════════════════════════════════════════════════════ */
+(function() {
+  const canvas = document.getElementById('starfield');
+  const ctx = canvas.getContext('2d');
+  let stars = [];
+  function resize() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    stars = Array.from({length: 220}, () => ({
+      x: Math.random() * canvas.width,
+      y: Math.random() * canvas.height,
+      r: Math.random() * 1.2 + 0.2,
+      a: Math.random(),
+      da: (Math.random() - 0.5) * 0.004
+    }));
+  }
+  function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    stars.forEach(s => {
+      s.a = Math.max(0.05, Math.min(1, s.a + s.da));
+      if (s.a <= 0.05 || s.a >= 1) s.da *= -1;
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(200,216,255,${s.a * 0.5})`;
+      ctx.fill();
+    });
+    requestAnimationFrame(draw);
+  }
+  resize();
+  window.addEventListener('resize', resize);
+  draw();
+})();
+
+/* ═══════════════════════════════════════════════════════
+   GITHUB API LAYER
+═══════════════════════════════════════════════════════ */
+const API = (() => {
+  function headers() {
+    const token = document.getElementById('token-input').value.trim();
+    const h = { 'Accept': 'application/vnd.github.v3+json' };
+    if (token) h['Authorization'] = `token ${token}`;
+    return h;
+  }
+
+  async function get(url) {
+    const res = await fetch(url, { headers: headers() });
+    // Update rate limit display
+    const remaining = res.headers.get('X-RateLimit-Remaining');
+    const limit     = res.headers.get('X-RateLimit-Limit');
+    if (remaining !== null) {
+      document.getElementById('rate-info').innerHTML =
+        `API RL: <b>${remaining}/${limit}</b>`;
+    }
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.message || `HTTP ${res.status}`);
+    }
+    return res.json();
+  }
+
+  // Get full file tree (recursive)
+  async function getTree(owner, repo) {
+    // First get default branch
+    const repoData = await get(`https://api.github.com/repos/${owner}/${repo}`);
+    const branch = repoData.default_branch || 'main';
+    const tree = await get(
+      `https://api.github.com/repos/${owner}/${repo}/git/trees/${branch}?recursive=1`
+    );
+    return { tree: tree.tree, repoData };
+  }
+
+  // Get contributors (paginated, max 2 pages to avoid hitting rate limit)
+  async function getContributors(owner, repo) {
+    const all = [];
+    for (let page = 1; page <= 2; page++) {
+      const data = await get(
+        `https://api.github.com/repos/${owner}/${repo}/contributors?per_page=100&page=${page}`
+      );
+      if (!Array.isArray(data) || data.length === 0) break;
+      all.push(...data);
+      if (data.length < 100) break;
+    }
+    return all;
+  }
+
+  return { getTree, getContributors };
+})();
+
+/* ═══════════════════════════════════════════════════════
+   HELPERS
+═══════════════════════════════════════════════════════ */
+function fmtBytes(b) {
+  if (b === 0) return '0 B';
+  const k = 1024, sizes = ['B','KB','MB','GB'];
+  const i = Math.floor(Math.log(b) / Math.log(k));
+  return (b / Math.pow(k, i)).toFixed(1) + ' ' + sizes[i];
+}
+
+function fileColor(item) {
+  if (item.type === 'tree') return '#a78bfa';
+  const ext = item.path.split('.').pop().toLowerCase();
+  const src = ['js','ts','jsx','tsx','py','c','cpp','h','rs','go','java','rb','cs','swift','kt','f90','f','for'];
+  const cfg = ['json','yaml','yml','toml','ini','env','config','xml','csv','sh','bash','zsh','dockerfile','makefile'];
+  const doc = ['md','rst','txt','pdf','adoc','tex'];
+  const bin = ['png','jpg','jpeg','gif','svg','ico','woff','woff2','ttf','eot','mp4','webm','mp3','zip','tar','gz'];
+  if (src.includes(ext)) return '#4dffa8';
+  if (cfg.includes(ext)) return '#ffd166';
+  if (doc.includes(ext)) return '#ff6b6b';
+  if (bin.includes(ext)) return '#60c3ff';
+  return '#4dffa8';
+}
+
+/* ═══════════════════════════════════════════════════════
+   STATUS UI
+═══════════════════════════════════════════════════════ */
+function showStatus(msg, type = 'loading') {
+  const bar = document.getElementById('status-bar');
+  const spinner = document.getElementById('spinner');
+  bar.className = `show ${type}`;
+  document.getElementById('status-msg').textContent = msg;
+  spinner.style.display = type === 'loading' ? 'block' : 'none';
+}
+function hideStatus() {
+  document.getElementById('status-bar').className = '';
+}
+
+/* ═══════════════════════════════════════════════════════
+   D3 FORCE SIMULATION
+═══════════════════════════════════════════════════════ */
+let currentSim = null;
+
+function buildGraph(treeItems, contributors) {
+  // Build commit-count map: filename → commit count (proxy via contributor commits)
+  // Since getting per-file commits is expensive, we distribute contributor commits
+  // by path depth as a heuristic, and weight shallow files more.
+  const totalCommits = contributors.reduce((s, c) => s + (c.contributions || 0), 0);
+
+  // Nodes: only files + directories (cap at 300 to keep performance)
+  const MAX_NODES = 300;
+  let items = treeItems.slice(0, MAX_NODES);
+
+  // Assign "gravity weight" heuristically:
+  // files at shallower depth get higher weight; large files get more
+  function gravityWeight(item) {
+    const depth = item.path.split('/').length;
+    const sizeScore = Math.log1p(item.size || 0);
+    const depthScore = 1 / depth;
+    // normalize commit-share: shallow important files attract more
+    return (sizeScore * 2 + depthScore * 3) * (totalCommits / Math.max(items.length, 1));
+  }
+
+  const nodes = items.map((item, i) => ({
+    id: item.path,
+    label: item.path.split('/').pop() || item.path,
+    path: item.path,
+    size: item.size || 0,
+    type: item.type === 'tree' ? 'dir' : 'file',
+    gravity: gravityWeight(item),
+    color: fileColor(item),
+    depth: item.path.split('/').length,
+  }));
+
+  // Add a virtual root "star" node
+  nodes.unshift({
+    id: '__root__',
+    label: '★',
+    size: 0,
+    type: 'root',
+    gravity: totalCommits,
+    color: '#ffd166',
+    depth: 0,
+    fx: 0, fy: 0  // fixed at center
+  });
+
+  // Links: each file → its parent directory (or root)
+  const idSet = new Set(nodes.map(n => n.id));
+  const links = [];
+  nodes.forEach(n => {
+    if (n.id === '__root__') return;
+    const parts = n.path.split('/');
+    const parentPath = parts.slice(0, -1).join('/');
+    const targetId = parentPath && idSet.has(parentPath) ? parentPath : '__root__';
+    links.push({
+      source: n.id,
+      target: targetId,
+      strength: Math.log1p(n.gravity) / Math.log1p(nodes[0].gravity + 1)
+    });
+  });
+
+  return { nodes, links, totalCommits, contributors };
+}
+
+function renderForce(graphData) {
+  const { nodes, links, totalCommits, contributors } = graphData;
+
+  const svg = d3.select('#main-svg');
+  svg.selectAll('*').remove();
+
+  const rect = document.getElementById('viz').getBoundingClientRect();
+  const W = rect.width, H = rect.height;
+
+  svg.attr('viewBox', `${-W/2} ${-H/2} ${W} ${H}`);
+
+  // Zoom/pan
+  const zoom = d3.zoom()
+    .scaleExtent([0.1, 8])
+    .on('zoom', (e) => container.attr('transform', e.transform));
+  svg.call(zoom);
+
+  const container = svg.append('g');
+
+  // Radial gradient bg nebula
+  const defs = svg.append('defs');
+  const grad = defs.append('radialGradient').attr('id', 'nebula');
+  grad.append('stop').attr('offset', '0%').attr('stop-color', '#0a1a3a').attr('stop-opacity', 0.6);
+  grad.append('stop').attr('offset', '100%').attr('stop-color', '#03050f').attr('stop-opacity', 0);
+  container.append('ellipse')
+    .attr('rx', W * 0.4).attr('ry', H * 0.35)
+    .attr('fill', 'url(#nebula)');
+
+  // Radius scale
+  const maxSize = d3.max(nodes.filter(n => n.type !== 'root'), n => n.size) || 1;
+  const rScale = d3.scaleSqrt().domain([0, maxSize]).range([3, 28]);
+
+  // Force simulation
+  if (currentSim) currentSim.stop();
+  currentSim = d3.forceSimulation(nodes)
+    .force('link', d3.forceLink(links)
+      .id(d => d.id)
+      .distance(d => {
+        // Heavier files pulled closer
+        const s = d.source.size || 1;
+        return Math.max(40, 200 - Math.log1p(s) * 6);
+      })
+      .strength(d => 0.3 + d.strength * 0.7)
+    )
+    .force('charge', d3.forceManyBody()
+      .strength(d => {
+        if (d.type === 'root') return 0;
+        const mass = rScale(d.size);
+        return -30 - mass * 4; // heavier = more repulsion to space out
+      })
+    )
+    .force('gravity', d3.forceRadial(d => {
+      // Gravity: heavily-committed files pulled to center
+      if (d.type === 'root') return 0;
+      const maxG = d3.max(nodes, n => n.gravity);
+      const ratio = d.gravity / (maxG || 1);
+      // High gravity → small radius (close to center)
+      return (1 - ratio) * Math.min(W, H) * 0.38 + 40;
+    }, 0, 0).strength(0.08))
+    .force('collision', d3.forceCollide(d => rScale(d.size || 1) + 3))
+    .alphaDecay(0.018);
+
+  // Links
+  const linkSel = container.append('g').attr('class', 'links')
+    .selectAll('line')
+    .data(links)
+    .join('line')
+    .attr('class', 'link')
+    .style('stroke-opacity', d => 0.05 + d.strength * 0.4);
+
+  // Nodes
+  const nodeSel = container.append('g').attr('class', 'nodes')
+    .selectAll('g')
+    .data(nodes)
+    .join('g')
+    .attr('class', d => `node${d.type === 'dir' ? ' dir' : ''}`)
+    .call(d3.drag()
+      .on('start', (e, d) => {
+        if (!e.active) currentSim.alphaTarget(0.3).restart();
+        if (d.type !== 'root') { d.fx = d.x; d.fy = d.y; }
+      })
+      .on('drag', (e, d) => {
+        if (d.type !== 'root') { d.fx = e.x; d.fy = e.y; }
+      })
+      .on('end', (e, d) => {
+        if (!e.active) currentSim.alphaTarget(0);
+        if (d.type !== 'root') { d.fx = null; d.fy = null; }
+      })
+    );
+
+  // Circle glow filter
+  const filt = defs.append('filter').attr('id', 'glow');
+  filt.append('feGaussianBlur').attr('stdDeviation', '3').attr('result', 'blur');
+  const merge = filt.append('feMerge');
+  merge.append('feMergeNode').attr('in', 'blur');
+  merge.append('feMergeNode').attr('in', 'SourceGraphic');
+
+  nodeSel.append('circle')
+    .attr('r', d => d.type === 'root' ? 18 : rScale(d.size || 1))
+    .attr('fill', d => d.color)
+    .attr('fill-opacity', d => d.type === 'root' ? 1 : 0.82)
+    .attr('stroke', d => d.color)
+    .attr('stroke-opacity', 0.7)
+    .attr('class', d => d.type === 'root' ? 'center-star' : '')
+    .attr('filter', d => d.type === 'root' || rScale(d.size || 1) > 14 ? 'url(#glow)' : null);
+
+  // Labels for larger nodes
+  nodeSel.filter(d => d.type !== 'root' && rScale(d.size || 1) > 8)
+    .append('text')
+    .attr('dy', d => rScale(d.size) + 11)
+    .attr('text-anchor', 'middle')
+    .text(d => d.label.length > 16 ? d.label.slice(0, 14) + '…' : d.label);
+
+  // Tooltip
+  const tt = document.getElementById('tooltip');
+  nodeSel.on('mousemove', function(e, d) {
+    if (d.type === 'root') return;
+    document.getElementById('tt-name').textContent = d.label;
+    document.getElementById('tt-size').textContent = fmtBytes(d.size);
+    document.getElementById('tt-type').textContent = d.type;
+    document.getElementById('tt-commits').textContent = Math.round(d.gravity).toLocaleString();
+    const ext = d.path.split('.').pop();
+    document.getElementById('tt-ext').textContent = ext === d.path ? '—' : '.' + ext;
+    tt.style.left = (e.clientX + 14) + 'px';
+    tt.style.top  = (e.clientY - 10) + 'px';
+    tt.classList.add('show');
+  }).on('mouseleave', () => tt.classList.remove('show'));
+
+  // Tick
+  currentSim.on('tick', () => {
+    linkSel
+      .attr('x1', d => d.source.x).attr('y1', d => d.source.y)
+      .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
+    nodeSel.attr('transform', d => `translate(${d.x},${d.y})`);
+  });
+
+  // Stats
+  const fileCount = nodes.filter(n => n.type === 'file').length;
+  const dirCount  = nodes.filter(n => n.type === 'dir').length;
+  const totalSize = nodes.reduce((s, n) => s + (n.size || 0), 0);
+  document.getElementById('s-files').textContent = fileCount.toLocaleString();
+  document.getElementById('s-dirs').textContent  = dirCount.toLocaleString();
+  document.getElementById('s-size').textContent  = fmtBytes(totalSize);
+  document.getElementById('s-contrib').textContent = contributors.length.toLocaleString();
+  document.getElementById('s-commits').textContent  = totalCommits.toLocaleString();
+
+  document.getElementById('legend').classList.add('show');
+  document.getElementById('stats').classList.add('show');
+  document.getElementById('instructions').style.display = 'none';
+
+  // Auto-fit after sim settles
+  setTimeout(() => {
+    const bounds = container.node().getBBox();
+    const scale = 0.85 * Math.min(W / bounds.width, H / bounds.height);
+    const tx = -bounds.x * scale - bounds.width * scale / 2;
+    const ty = -bounds.y * scale - bounds.height * scale / 2;
+    svg.transition().duration(900)
+      .call(zoom.transform, d3.zoomIdentity.translate(tx, ty).scale(scale));
+  }, 3200);
+}
+
+/* ═══════════════════════════════════════════════════════
+   MAIN LOAD FLOW
+═══════════════════════════════════════════════════════ */
+async function loadRepo(repoString) {
+  const parts = repoString.trim().split('/');
+  if (parts.length < 2 || !parts[0] || !parts[1]) {
+    showStatus('Please enter a valid repo: owner/repo', 'error');
+    setTimeout(hideStatus, 3500);
+    return;
+  }
+  const [owner, repo] = parts;
+
+  document.getElementById('load-btn').disabled = true;
+  showStatus(`Fetching file tree for ${owner}/${repo}…`);
+
+  try {
+    // Step 1: File tree
+    const { tree, repoData } = await API.getTree(owner, repo);
+    showStatus(`Got ${tree.length} entries — fetching contributors…`);
+
+    // Step 2: Contributors
+    const contributors = await API.getContributors(owner, repo);
+    showStatus(`Building gravitational field…`);
+
+    // Step 3: Build + render
+    const graphData = buildGraph(tree, contributors);
+    renderForce(graphData);
+    hideStatus();
+  } catch (err) {
+    showStatus(`Error: ${err.message}`, 'error');
+    setTimeout(hideStatus, 6000);
+  } finally {
+    document.getElementById('load-btn').disabled = false;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════
+   EVENT LISTENERS
+═══════════════════════════════════════════════════════ */
+document.getElementById('load-btn').addEventListener('click', () => {
+  loadRepo(document.getElementById('repo-input').value);
+});
+
+document.getElementById('repo-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter') loadRepo(e.target.value);
+});
+
+// Demo repos
+const DEMOS = [
+  'facebook/react',
+  'torvalds/linux',
+  'microsoft/vscode',
+  'tensorflow/tensorflow',
+  'vuejs/vue',
+];
+const placeholder = DEMOS[Math.floor(Math.random() * DEMOS.length)];
+document.getElementById('repo-input').placeholder = `e.g. ${placeholder}`;
+
+// Window resize: re-attach viewBox
+window.addEventListener('resize', () => {
+  const svg = d3.select('#main-svg');
+  if (!svg.selectAll('*').empty()) {
+    const rect = document.getElementById('viz').getBoundingClientRect();
+    svg.attr('viewBox', `${-rect.width/2} ${-rect.height/2} ${rect.width} ${rect.height}`);
+  }
+});
+</script>
+</body>
+</html>
