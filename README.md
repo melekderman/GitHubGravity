@@ -1,108 +1,190 @@
-# GitHub Gravity 🌌
+# Codebase Health Map 🧬
 
-A single-page interactive visualization that turns any GitHub repository into a living solar system. Files become planets, their size defines their mass, and contributor activity bends the gravity pulling them toward the center.
-
-![GitHub Gravity](https://img.shields.io/badge/built_with-D3.js-f97316?style=flat-square) ![License](https://img.shields.io/badge/license-MIT-4dffa8?style=flat-square) ![Zero dependencies](https://img.shields.io/badge/zero-backend-a78bfa?style=flat-square)
+A single-page interactive visualization that scans any public GitHub repository and turns its recent engineering activity into a **living health map**. Files become orbiting nodes — their color reflects recency, their size reflects churn, and their distance from the center reveals collaboration risk.
 
 ---
 
-## What it does
+## What It Does
 
-Enter any public GitHub repository (`owner/repo`) and watch its entire file tree materialize as a force-directed particle system:
+Enter any public GitHub repository in `owner/repo` format and the app builds a visual health profile of its codebase using recent repository activity.
 
-- **File size → mass** — larger files render as bigger nodes and exert stronger repulsion on their neighbors
-- **Contributor activity → gravity** — files touched by more commits get pulled toward the center star; rarely-touched files drift to the outer orbit
-- **Directory structure → link bonds** — each file is tethered to its parent directory, with bond strength proportional to commit weight
-- **File type → color** — at a glance you can see whether a repo is source-heavy, doc-heavy, or config-heavy
+Each file is rendered as a node in a force-directed orbital system:
 
-The result is an honest, physical portrait of a codebase: the files that matter most cluster at the core; the forgotten ones float at the edge.
+- **Color → Recency** — Recently touched files glow green; aging files shift toward amber and red; untouched files fade into cold blue-gray.
+- **Size → Churn** — Files that appear in more recent commits become larger, highlighting hotspots of change.
+- **Orbit → Bus Factor Risk** — Files touched by only one contributor are pulled inward, making high-risk ownership concentration immediately visible.
+- **Warning Rings → Maintenance Signals** — Pulsing rings mark files with bus-factor risk or bug-fix-heavy activity.
+- **Links → Directory Structure** — Each file is tethered to the center through parent-path bonds, preserving a sense of repository anatomy.
 
----
-
-## Physics model
-
-Three D3 force components run simultaneously:
-
-| Force | Role |
-|---|---|
-| `forceRadial` | Sets each node's target orbital radius based on its gravity weight — heavier files orbit closer to the center |
-| `forceManyBody` | N-body repulsion between all nodes; larger nodes repel more strongly, preventing visual clutter |
-| `forceLink` | Spring bonds from each file to its parent directory; strength scales with normalized commit activity |
-| `forceCollide` | Collision detection using each node's actual radius so nodes never overlap |
-
-Gravity weight is computed from file size and path depth as a proxy for importance, distributed proportionally across total contributor commit counts. Per-file commit history is intentionally skipped to stay within GitHub's rate limits without authentication.
+The result is a compact, visual snapshot of codebase health: active files, fragile ownership zones, and potentially unstable hotspots stand out at a glance.
 
 ---
 
-## Usage
+## How the Health Model Works
 
-### No install — open in browser
+The visualization combines lightweight GitHub metadata with recent commit history to estimate file-level risk and activity.
+
+### Signals
+
+| Signal               | Source                                                                 |
+| -------------------- | ---------------------------------------------------------------------- |
+| **Recency**          | Most recent commit date associated with each file                      |
+| **Churn**            | Frequency of a file appearing in recent commit diffs                   |
+| **Contributor count** | Unique authors touching that file within the analyzed commit window    |
+| **Bug-fix ratio**    | Commit messages containing keywords: `fix`, `bug`, `patch`, `error`, `hotfix`, `regression` |
+
+### Risk Heuristics
+
+- **Bus factor risk** — Flagged when a file has meaningful recent churn but only one author.
+- **Bug-prone** — Flagged when a large share of recent changes come from bug-fix-like commits.
+- **Untouched** — Files with no recent activity remain in the outer orbit with minimal visual emphasis.
+
+> [!NOTE]
+> This is intentionally heuristic, not a formal software quality metric. It is meant to reveal patterns quickly, not replace deeper engineering review.
+
+---
+
+## Visualization Model
+
+Several D3 force components run together to create the map:
+
+| Force             | Role                                                              |
+| ----------------- | ----------------------------------------------------------------- |
+| `forceLink`       | Connects each file to its parent structure, preserving repo shape |
+| `forceManyBody`   | Repels nodes from one another to prevent overlap                  |
+| `forceRadial`     | Places files at orbital distances based on collaboration risk     |
+| `forceCollide`    | Enforces physical spacing using each node's actual radius         |
+
+Additional visual layers:
+
+- Canvas-based animated starfield background
+- Glow filters for high-importance nodes
+- Pulsing alert rings for risky files
+- Hover tooltips with per-file health details
+- Auto-fit zoom after simulation warmup
+
+---
+
+## Getting Started
+
+No install required — open directly in a browser.
 
 ```bash
-git clone https://github.com/your-username/github-gravity
-open github-gravity.html
+git clone https://github.com/your-username/codebase-health-map
+open index.html
 ```
 
-Or just download `github-gravity.html` and open it directly. No server, no build step, no dependencies to install.
+Or simply download the single HTML file and open it locally. No build step, no framework, no backend.
 
-### Authenticate for larger repos
+### Scanning a Repository
 
-The GitHub API allows **60 unauthenticated requests/hour**. For big repositories like `torvalds/linux` or `microsoft/vscode`, paste a [Personal Access Token](https://github.com/settings/tokens) (no scopes needed for public repos) into the token field. This raises the limit to **5,000 requests/hour**.
+1. Enter a public repository in `owner/repo` format.
+2. Click **SCAN** or press **Enter**.
+3. Explore the generated health map.
 
-### Controls
+### Optional: GitHub Token
 
-| Action | Result |
-|---|---|
-| Type `owner/repo` + Enter | Load a repository |
-| Scroll | Zoom in / out |
-| Click + drag background | Pan |
-| Click + drag a node | Reposition that node |
-| Hover a node | Tooltip with file path, size, type, and commit weight |
+For deeper analysis, paste a **GitHub Personal Access Token** into the token field.
 
----
-
-## Rate limit strategy
-
-The app makes exactly **3 API calls** per repository load:
-
-1. `GET /repos/{owner}/{repo}` — fetch default branch name
-2. `GET /repos/{owner}/{repo}/git/trees/{branch}?recursive=1` — full file tree in one shot (avoids paginated directory traversal)
-3. `GET /repos/{owner}/{repo}/contributors?per_page=100` — up to 200 contributors across 2 pages
-
-The remaining rate limit is displayed live in the header after every request. The file tree is capped at **300 nodes** to keep the simulation smooth even on low-end hardware.
+| Mode            | Behavior                                                                 |
+| --------------- | ------------------------------------------------------------------------ |
+| **Without token** | Loads the repo and recent commits but skips detailed per-file inspection; falls back to lightweight heuristics |
+| **With token**    | Fetches recent commit details and produces a much richer file-level health map |
 
 ---
 
-## Color legend
+## Controls
 
-| Color | File type |
-|---|---|
-| 🟢 Green | Source code (`.js`, `.py`, `.c`, `.rs`, `.go`, …) |
-| 🟡 Yellow | Config & data (`.json`, `.yaml`, `.toml`, `.sh`, …) |
-| 🔴 Red | Docs & markup (`.md`, `.rst`, `.tex`, …) |
-| 🔵 Blue | Binary & media (`.png`, `.woff`, `.zip`, …) |
-| 🟣 Purple | Directories |
+| Action                       | Result                              |
+| ---------------------------- | ----------------------------------- |
+| Type `owner/repo` + Enter    | Scan a repository                   |
+| Click **SCAN**               | Start analysis                      |
+| Scroll                       | Zoom in / out                       |
+| Click + drag background      | Pan                                 |
+| Click + drag node            | Reposition a file manually          |
+| Hover a node                 | See file health metrics in tooltip  |
 
 ---
 
-## Technical stack
+## Visual Legend
 
-- **[D3.js v7](https://d3js.org/)** — force simulation, scales, zoom/pan, SVG rendering
-- **GitHub REST API v3** — file tree and contributor data
-- **Vanilla HTML/CSS/JS** — no framework, no bundler, no runtime dependencies
-- Canvas-based starfield rendered independently via `requestAnimationFrame`
+### Recency Colors
+
+| Color           | Meaning                              |
+| --------------- | ------------------------------------ |
+| 🟢 Bright green | Updated within 7 days               |
+| 🟩 Lime         | Updated within 7–30 days            |
+| 🟡 Amber        | Updated within 1–3 months           |
+| 🟠 Orange       | Updated within 3–12 months          |
+| 🔴 Red          | Updated more than 1 year ago        |
+| 🔵 Blue-gray    | Never touched in the analyzed window |
+
+### Indicators
+
+| Marker              | Meaning          |
+| ------------------- | ---------------- |
+| Red pulsing ring    | Bus factor risk  |
+| Orange pulsing ring | Bug-prone file   |
+
+### Encoding Summary
+
+- **Node radius** → Commit churn
+- **Orbit distance** → Inverse collaboration depth
+- **Link line** → Structural bond to repository layout
+
+---
+
+## API Strategy
+
+The app uses the **GitHub REST API** directly from the browser.
+
+### Core Requests
+
+- `GET /repos/{owner}/{repo}` — Repository metadata and default branch
+- `GET /repos/{owner}/{repo}/git/trees/{branch}?recursive=1` — Recursive file tree
+- `GET /repos/{owner}/{repo}/commits` — Recent commit list
+- `GET /repos/{owner}/{repo}/commits/{sha}` — Commit details for selected recent commits
+
+### Rate-Limit Considerations
+
+- File scan is capped for performance.
+- Recent commits are limited to a small window.
+- Detailed commit inspection is batched with short delays between requests to reduce rate-limit pressure.
+
+---
+
+## Technical Stack
+
+| Layer      | Technology                                        |
+| ---------- | ------------------------------------------------- |
+| Layout     | [D3.js v7](https://d3js.org/) — force simulation, drag, zoom, SVG rendering |
+| Data       | GitHub REST API v3 — repository tree and commit data |
+| Frontend   | Vanilla HTML / CSS / JS — single-file architecture |
+| Background | Canvas — animated starfield                       |
+| Graph      | SVG — interactive node graph and overlays         |
 
 ---
 
 ## Limitations
 
-- **Private repos** require a token with `repo` scope
-- **Very large repos** (50k+ files) will be truncated to the first 300 entries returned by the tree API; recursive trees over GitHub's size limit may return `truncated: true`
-- Per-file commit history is approximated rather than fetched directly — precise per-file attribution would require one API call per file, which would exhaust rate limits instantly
-- The simulation is CPU-bound; older devices may see frame drops with 300+ nodes
+- The analysis is heuristic, not a formal code quality audit.
+- Per-file health is only as good as the recent commit window being sampled.
+- In limited mode (no token), file-level signals are partially approximated.
+- Bug-prone detection relies on commit message keywords and can misclassify.
+- Large repositories are capped for visual performance.
+- Older or low-powered devices may experience slower force simulation.
+
+---
+
+## Why It Exists
+
+Most repository tools tell you *what files exist*.
+This one tries to show **how a codebase behaves**.
+
+Instead of a static tree, you get a visual field of ownership concentration, activity hotspots, stale zones, and maintenance pressure — all in one screen. Designed for quick exploration, technical storytelling, and making hidden code health patterns visible.
 
 ---
 
 ## License
 
-MIT — do whatever you want with it.
+[MIT](LICENSE) — Use it freely, modify it, and adapt it to your own engineering workflows.
